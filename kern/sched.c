@@ -30,7 +30,28 @@ sched_yield(void)
 
 	// LAB 4: Your code here.
 
+	idle = thiscpu->cpu_env;
+	int id;	
+	if (idle != NULL)
+		id = ENVX(idle->env_id);
+	else
+		id = NENV-1;
+	int i;
+	int count = 0;
+	//env_run(&envs[1]);
+	
+	for (i = (id+1)%NENV; count != NENV; i=(i+1)%NENV, count++) {
+
+		if (envs[i].env_status == ENV_RUNNABLE) {
+			//cprintf("ID = %d\n", ENVX(envs[i].env_id));
+			env_run(&envs[i]);
+		}
+	}
+	if (idle != NULL && idle->env_status == ENV_RUNNING) {
+		env_run(idle);
+	}
 	// sched_halt never returns
+	//cprintf("sched_halt\n");
 	sched_halt();
 }
 
@@ -41,7 +62,6 @@ void
 sched_halt(void)
 {
 	int i;
-
 	// For debugging and testing purposes, if there are no runnable
 	// environments in the system, then drop into the kernel monitor.
 	for (i = 0; i < NENV; i++) {
