@@ -1,5 +1,0 @@
-Questions-
-A1) To distinguish if error code has to be pushed inside or not. In some cases pushing the error code is needed for interrupt handling.
-A2) No, nothing extra was needed. That is because user was executing a code that wasn't in its previlige level. Hence a trap 13 is expected.
-A3) In arguments od SETGATE we need to set DPL = 3 intead of DPL =0 , otherwise we would have a general protection fault indicating that the user is trying to execute code that isn't in its previlege level.
-A4) We enforce permissions by this. We should be careful about what calls to systems are made via exceptions, because through these we execute code at kernel level permisions from a user level previlige.
