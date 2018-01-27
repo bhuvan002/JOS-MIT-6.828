@@ -137,7 +137,12 @@ static int
 sys_env_set_pgfault_upcall(envid_t envid, void *func)
 {
 	// LAB 4: Your code here.
-	panic("sys_env_set_pgfault_upcall not implemented");
+	struct Env *e;
+	if (envid2env(envid, &e, true) < 0) {
+		return -E_BAD_ENV;
+	}
+	e->env_pgfault_upcall = func;
+	return 0;
 }
 
 // Allocate a page of memory and map it at 'va' with permission
@@ -305,7 +310,53 @@ static int
 sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 {
 	// LAB 4: Your code here.
-	panic("sys_ipc_try_send not implemented");
+	struct Env *e;
+	if (envid2env(envid, &e, 0) < 0) {
+		return -E_BAD_ENV;
+	}
+	if (!e->env_ipc_recving) {
+		return -E_IPC_NOT_RECV;
+	}
+	uintptr_t srcvaddr = (uintptr_t)srcva;
+	if ((srcvaddr < UTOP) && (srcvaddr & ~(~0 << PGSHIFT))) {
+		return -E_INVAL;
+	}
+	if ((srcvaddr < UTOP) && (
+		(perm&(PTE_U|PTE_P))!=(PTE_U|PTE_P) || 
+		perm & ~PTE_SYSCALL
+		) 
+	) {
+		return -E_INVAL;
+	}
+
+	if ((srcvaddr < UTOP) && user_mem_check(curenv, srcva, PGSIZE, perm) < 0) {
+		return -E_INVAL;
+	}
+	if ((perm&PTE_W) && (user_mem_check(curenv, srcva, PGSIZE, perm) < 0)) {
+		return -E_INVAL;
+	}
+	e->env_ipc_perm = 0;
+	if (srcvaddr <UTOP && (uintptr_t)e->env_ipc_dstva < UTOP) {
+		pte_t* pte_store;
+		struct Env *e1 = curenv;
+		struct Env *e2 = e;
+		struct PageInfo *pp = page_lookup(e1->env_pgdir, srcva, &pte_store);
+		if(pp == NULL)
+			return -E_INVAL;
+		if((perm & PTE_W) && ((*pte_store & PTE_W) == 0))
+			return -E_INVAL;
+
+		if(page_insert(e2->env_pgdir, pp, e->env_ipc_dstva, perm)<0) {
+			return -E_NO_MEM;
+		}
+		
+		e->env_ipc_perm = perm;
+	}
+	e->env_ipc_value = value;
+	e->env_ipc_recving = false;
+	e->env_ipc_from = curenv->env_id;
+	e->env_status = ENV_RUNNABLE;
+	return 0;
 }
 
 // Block until a value is ready.  Record that you want to receive
@@ -323,7 +374,14 @@ static int
 sys_ipc_recv(void *dstva)
 {
 	// LAB 4: Your code here.
-	panic("sys_ipc_recv not implemented");
+	if((uintptr_t)dstva<UTOP && ((uintptr_t)dstva & (PGSIZE-1)))
+		return -E_INVAL;
+	if((uintptr_t)dstva<UTOP)
+		curenv->env_ipc_dstva = dstva;
+	curenv->env_ipc_recving = true;
+	curenv->env_tf.tf_regs.reg_eax = 0;
+	sys_env_set_status(0,ENV_NOT_RUNNABLE);
+	sys_yield();
 	return 0;
 }
 
@@ -360,6 +418,12 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 		return sys_page_map(a1, (void *)a2, a3, (void *)a4, a5);
 	case SYS_page_unmap:
 		return sys_page_unmap(a1, (void *)a2);
+	case SYS_env_set_pgfault_upcall:
+		return sys_env_set_pgfault_upcall(a1, (void *)a2);
+	case SYS_ipc_recv:
+		return sys_ipc_recv((void *)a1);
+	case SYS_ipc_try_send:
+		return sys_ipc_try_send(a1,a2,(void *)a3,a4);
 	default:
 		return -E_NO_SYS;
 	}

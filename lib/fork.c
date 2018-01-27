@@ -25,7 +25,9 @@ pgfault(struct UTrapframe *utf)
 	//   (see <inc/memlayout.h>).
 
 	// LAB 4: Your code here.
-
+	uintptr_t pt_entry = uvpt[PGNUM(addr)];
+	if(!(pt_entry & (PTE_COW|PTE_W))) // && !(err&2)
+		panic("Given page is not copy on write or write.");
 	// Allocate a new page, map it at a temporary location (PFTEMP),
 	// copy the data from the old page to the new page, then move the new
 	// page to the old page's address.
@@ -33,8 +35,15 @@ pgfault(struct UTrapframe *utf)
 	//   You should make three system calls.
 
 	// LAB 4: Your code here.
-
-	panic("pgfault not implemented");
+	addr = ROUNDDOWN(addr, PGSIZE);
+	if (sys_page_alloc(0, (void *)PFTEMP, PTE_W|PTE_U|PTE_P) < 0) {
+		panic("out of memory!");
+	}
+	memmove((void *)PFTEMP, addr, PGSIZE);
+	if (sys_page_map(0, (void *)(PFTEMP), 0, addr, PTE_W|PTE_P|PTE_U) < 0)
+		panic("error");
+	if (sys_page_unmap(0, (void *)PFTEMP) < 0)
+		panic("error in unmapping");
 }
 
 //
@@ -54,7 +63,15 @@ duppage(envid_t envid, unsigned pn)
 	int r;
 
 	// LAB 4: Your code here.
-	panic("duppage not implemented");
+	int perm = 0;
+	uintptr_t pt_entry = uvpt[pn];
+	if ((pt_entry & PTE_COW) || (pt_entry & PTE_W)) {
+		perm |= PTE_COW;
+	}
+	if ((sys_page_map(0, (void *)(pn*PGSIZE), envid, (void *)(pn*PGSIZE), perm|PTE_P|PTE_U)) < 0)
+		panic("error");
+	if ((sys_page_map(0, (void *)(pn*PGSIZE), 0, (void *)(pn*PGSIZE), perm|PTE_P|PTE_U)) < 0)
+		panic("error");
 	return 0;
 }
 
@@ -78,7 +95,31 @@ envid_t
 fork(void)
 {
 	// LAB 4: Your code here.
-	panic("fork not implemented");
+	set_pgfault_handler(pgfault);
+	envid_t childpid = sys_exofork();
+	if (childpid < 0) {
+		panic("sys_exofork()");
+	}
+	if (childpid == 0) {
+		thisenv = envs + ENVX(sys_getenvid());
+		return 0;
+	}
+	uintptr_t i;
+	for (i = 0; i < UTOP; i += PGSIZE) {
+		if (!(uvpd[PDX(i)] & PTE_P)) continue;
+		if (!(uvpt[i/PGSIZE] & PTE_P)) continue;
+		if (i != UXSTACKTOP - PGSIZE) {
+			duppage(childpid, i/PGSIZE);
+		}
+	}
+	if (sys_page_alloc(childpid, (void *)(UXSTACKTOP - PGSIZE), PTE_U|PTE_P|PTE_W) < 0)
+		panic("error");
+	if (sys_env_set_pgfault_upcall(childpid, thisenv->env_pgfault_upcall) < 0)
+		panic("error");
+	if (sys_env_set_status(childpid, ENV_RUNNABLE) < 0)
+		panic("error");
+	return childpid;
+
 }
 
 // Challenge!

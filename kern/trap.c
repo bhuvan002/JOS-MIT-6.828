@@ -94,29 +94,39 @@ trap_init(void)
 	void t_syscall();
 	void t_coproc();
 	void t_res();
-	SETGATE(idt[0], 1, GD_KT, &t_divide, 0);
-	SETGATE(idt[1], 1, GD_KT, &t_debug, 0);
-	SETGATE(idt[2], 1, GD_KT, &t_nmi, 0);
-	SETGATE(idt[3], 0, GD_KT, &t_brkpt, 3);
-	SETGATE(idt[4], 1, GD_KT, &t_oflow, 0);
-	SETGATE(idt[5], 1, GD_KT, &t_bound, 0);
-	SETGATE(idt[6], 1, GD_KT, &t_illop, 0);
-	SETGATE(idt[7], 1, GD_KT, &t_device, 0);
-	SETGATE(idt[8], 1, GD_KT, &t_dblflt, 0);
-	SETGATE(idt[9], 1, GD_KT, &t_coproc, 0);
-	SETGATE(idt[10], 1, GD_KT, &t_tss, 0);
-	SETGATE(idt[11], 1, GD_KT, &t_segnp, 0);
-	SETGATE(idt[12], 1, GD_KT, &t_stack, 0);
-	SETGATE(idt[13], 1, GD_KT, &t_gpflt, 3);
-	SETGATE(idt[14], 1, GD_KT, &t_pgflt, 0);
-	SETGATE(idt[15], 1, GD_KT, &t_res, 0);
-	SETGATE(idt[16], 1, GD_KT, &t_fperr, 0);
-	SETGATE(idt[17], 1, GD_KT, &t_align, 0);
-	SETGATE(idt[18], 1, GD_KT, &t_mchk, 0);
-	SETGATE(idt[19], 1, GD_KT, &t_simderr, 0);
-	SETGATE(idt[48], 1, GD_KT, &t_syscall, 3);
-
-
+	void t_timer   ();
+	void t_kbd     ();
+	void t_serial  ();
+	void t_spurious();
+	void t_ide     ();
+	void t_error ();  
+	SETGATE(idt[0], 0, GD_KT, &t_divide, 0);
+	SETGATE(idt[1], 0, GD_KT, &t_debug, 0);
+	SETGATE(idt[2], 0, GD_KT, &t_nmi, 0);
+	SETGATE(idt[3], 0, GD_KT, &t_brkpt,  3);
+	SETGATE(idt[4], 0, GD_KT, &t_oflow ,  0);
+	SETGATE(idt[5], 0, GD_KT, &t_bound ,  0);
+	SETGATE(idt[6], 0, GD_KT, &t_illop ,  0);
+	SETGATE(idt[7], 0, GD_KT, &t_device,  0);
+	SETGATE(idt[8], 0, GD_KT, &t_dblflt,  0);
+	SETGATE(idt[9], 0, GD_KT, &t_coproc,  0);
+	SETGATE(idt[10], 0, GD_KT, &t_tss, 0);
+	SETGATE(idt[11], 0, GD_KT, &t_segnp, 0);
+	SETGATE(idt[12], 0, GD_KT, &t_stack, 0);
+	SETGATE(idt[13], 0, GD_KT, &t_gpflt, 3);
+	SETGATE(idt[14], 0, GD_KT, &t_pgflt, 0);
+	SETGATE(idt[15], 0, GD_KT, &t_res, 0);
+	SETGATE(idt[16], 0, GD_KT, &t_fperr, 0);
+	SETGATE(idt[17], 0, GD_KT, &t_align, 0);
+	SETGATE(idt[18], 0, GD_KT, &t_mchk, 0);
+	SETGATE(idt[19], 0, GD_KT, &t_simderr, 0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_TIMER   ], 0, GD_KT, &t_timer   ,  0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_KBD     ], 0, GD_KT, &t_kbd     ,  0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_SERIAL  ], 0, GD_KT, &t_serial  ,  0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_SPURIOUS], 0, GD_KT, &t_spurious,  0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_IDE     ], 0, GD_KT, &t_ide     ,  0);
+	SETGATE(idt[IRQ_OFFSET + IRQ_ERROR   ], 0, GD_KT, &t_error   ,  0);
+	SETGATE(idt[48], 0, GD_KT, &t_syscall, 3);
 	// Per-CPU setup 
 	trap_init_percpu();
 }
@@ -250,7 +260,11 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
-
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
+		lapic_eoi();
+		sched_yield();
+		return;
+	}
 
 
 
@@ -335,8 +349,8 @@ page_fault_handler(struct Trapframe *tf)
 
 	// Handle kernel-mode page faults.
 	// LAB 3: Your code here.
-	if ((tf->tf_cs & 1) == 0) {
-		panic("Kernel page fault!");
+	if ((tf->tf_cs & 3) != 3) {
+		//panic("Kernel page fault!");
 	}
 
 	// We've already handled kernel-mode exceptions, so if we get here,
@@ -371,7 +385,32 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
+	if (curenv->env_pgfault_upcall!=NULL) {
+		struct UTrapframe utf;
+		uintptr_t tfp;
+		if(tf->tf_esp>=UXSTACKTOP-PGSIZE && tf->tf_esp<UXSTACKTOP) {
+			tfp = (uintptr_t)tf->tf_esp -sizeof(struct UTrapframe)-4;
+			user_mem_assert(curenv, (void *)(tfp), sizeof(struct UTrapframe)+4, 
+			PTE_P|PTE_U|PTE_W);
+		}
+		else {
+			tfp = UXSTACKTOP - sizeof(struct UTrapframe);
+			user_mem_assert(curenv, (void *)(tfp), sizeof(struct UTrapframe), 
+			PTE_P|PTE_U|PTE_W);
+		}
 
+		utf.utf_esp = tf->tf_esp;
+		utf.utf_eflags = tf->tf_eflags;
+		utf.utf_eip = tf->tf_eip;
+		utf.utf_regs = tf->tf_regs;
+		utf.utf_err = tf->tf_err;
+		utf.utf_fault_va = fault_va;
+		*((struct UTrapframe *)tfp) = utf;
+		tf->tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		tf->tf_esp = tfp;
+		env_run(curenv);
+		return;
+	}
 	// Destroy the environment that caused the fault.
 	cprintf("[%08x] user fault va %08x ip %08x\n",
 		curenv->env_id, fault_va, tf->tf_eip);
